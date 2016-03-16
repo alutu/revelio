@@ -2,8 +2,8 @@
 #ifndef TESTS_H_INCLUDED
 #define TESTS_H_INCLUDED
 
-#define STUN_SERVER "stun.stunprotocol.org"
-#define STUN_PORT 3478 //3479
+#define STUN_SERVER "stun.l.google.com"
+#define STUN_PORT 19302 //3478, 3479
 #define STUN_COUNT 1
 #define TIMEOUT 3
 #define PACKAGE		"REVELIO"
