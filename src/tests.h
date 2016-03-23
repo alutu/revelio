@@ -7,7 +7,7 @@
 #define STUN_COUNT 1
 #define TIMEOUT 3
 #define PACKAGE		"REVELIO"
-#define VERSION		"2.6"
+#define VERSION		"3.0"
 #define MAXBUFLEN 62
 #define PACKET_SIZE 1024
 #define NO_ICMP_PACKET_TO_READ 0
