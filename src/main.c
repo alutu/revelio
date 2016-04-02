@@ -288,7 +288,7 @@ int main(int argc, char ** argv) {
 	char tests[4096];
 	setvbuf(stdout, tests, _IOFBF, 4096);
 	//test description
-	fprintf(stdout, "CGNATDETECT;");
+	fprintf(stdout, "%s-%s;", PACKAGE, VERSION);
 
 	// add unix timestamp
 	fprintf(stdout, "%d;", (int) time(NULL));
