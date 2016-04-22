@@ -333,8 +333,8 @@ def main():
 #1)
             for packet_size in ttl_probe_data['packet_size'].unique():
                 if packet_size >100 : # exclude the traceroute to the STUN mapped address which is being done with packet_size = 100
-                    SORTTs[probe, ttl][packet_size] = ttl_probe_data[ttl_probe_data['packet_size'] == packet_size]['RTT'].quantile(0.2)
-				# we use the second percentile .quantile(0.02) instead of the minimum .min()
+                    SORTTs[probe, ttl][packet_size] = ttl_probe_data[ttl_probe_data['packet_size'] == packet_size]['RTT'].min()
+				# we can also use the second percentile .quantile(0.02) instead of the minimum .min()
                     #print "Percentile: " + str(percentile(ttl_probe_data[ttl_probe_data['packet_size'] == packet_size]['RTT'], 2))
                     #print "Quantile: " + str(ttl_probe_data[ttl_probe_data['packet_size'] == packet_size]['RTT'].quantile(0.02))
                 else:
