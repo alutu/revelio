@@ -116,25 +116,25 @@ class Revelio(object):
         return "Yes"
 
   # this test verifies if the GRA is configured by a device after the access link (i.e., in the access network of the ISP)
-  def Traceroute_GRA(self):
-    #TODO: make sure that this is correct
-    if self.trace_gra == self.ttl_gra: # all the hops we test with traeroute reply with an IP
-                                       # traceroute does not timeout
-      if self.ttl_gra >= self.pathchar:
-        if options.verbose:
-          print "NAT444 True: GRA is beyond the access link"
-        return True
-      else:
-        if options.verbose:
-          print "NAT444 False: GRA is before the access link."
+  def Traceroute_GRA(self): #TODO: make sure that this is correct
+    if self.trace_gra == self.ttl_gra and self.pathchar!=0: # all the hops we test with traeroute reply with an IP
+                                                            # traceroute does not timeout
+      if self.ttl_gra ==1:
         return False
-    elif self.ttl_gra < 16 and self.trace_gra < self.ttl_gra: # traceroute does not timeout 
-                                                              # but some hops do not reply to the traceroute probe
+      elif self.ttl_gra >= self.pathchar :
+        if options.verbose:
+          print "NAT444 True: GRA is AFTER the access link."
+        return True
+      elif self.ttl_gra < self.pathchar:
+        if options.verbose:
+          print "NAT444 False: GRA is BEFORE the access link."
+        return False
+    elif self.ttl_gra < 16 and self.pathchar!=0: # traceroute does not timeout 
+                             # but some hops do not reply to the traceroute probe
       if self.ttl_gra >= self.pathchar:
         if options.verbose:
-          print "NAT444 True: GRA is beyond the access link"
+          print "NAT444 True: GRA is AFTER the access link."
         return True
-
     else:
       if options.verbose:
         print "NAT444 inconclusive: we cannot say if there is a NAT444 only from this info"
@@ -178,8 +178,11 @@ class Revelio(object):
 
       if self.shared_ip == 0:
         for ip in self.upnp:
-          if IPAddress(ip) in SHARED:
-            return True
+          try:
+            if IPAddress(ip) in SHARED:
+              return True
+          except:
+            continue
 
         if self.local_ip:
           if IPAddress(self.local_ip) in SHARED:
@@ -208,8 +211,13 @@ def parse_trace(trace, deployment):
         for hop in traceroute[3:-1]: # first three fields are irrelevant in the output of the windows traceroute
             ttl = hop.split()[0] # hop number (TTL)
             if "Request timed out." not in hop:
-              hop_ip = hop.split()[2] # the hop IP
-              hop_rtt = float(hop.split()[1].split("ms")[0]) # the RTT in ms
+              try:
+                hop_ip = hop.split()[2] # the hop IP
+                hop_rtt = float(hop.split()[1].split("ms")[0]) # the RTT in ms
+              except:
+                if options.verbose:
+                  print "Traceroute output incomplete!"
+                continue
             else:
               hop_ip = None
               hop_rtt = None
@@ -247,8 +255,13 @@ def parse_trace(trace, deployment):
         for hop in traceroute[1:-1]: 
             ttl = int(hop.split()[0]) # hop number (TTL)
             if "*" not in str(hop):
-              hop_ip = hop.split()[1] # the hop IP
-              hop_rtt = float(hop.split()[2]) # the RTT in ms
+              try:
+                hop_ip = hop.split()[1] # the hop IP
+                hop_rtt = float(hop.split()[2]) # the RTT in ms
+              except: # the output is broken -- skip that traceroute
+                if options.verbose:
+                  print "Traceroute output incomplete!"
+                continue
             else:
               hop_ip = None
               hop_rtt = None
@@ -337,6 +350,8 @@ def run_pathchar(trace_rtt, uuid):
     slope_intercept = dict() # for each TTL, keep the parameters of the fitted cure
     access_link = 0 # the position of the access link reported to the device running Revelio
     links = [] # store how many links we can parse from the TTL
+    #if options.plot:
+    #  plt.figure(1)
     if options.verbose:
         print "Running pathchar for device " + str(uuid)
         print "TTL vector: " + str(sort([int(x) for x in trace_rtt.keys()]))
@@ -380,8 +395,9 @@ def run_pathchar(trace_rtt, uuid):
               if options.verbose:
                 print " No input for pathchar"
               break
-            ###plt.plot(probe_ttl_df['packet_size'], probe_ttl_df['min_rtt'], 'o', color = 'k')
-            ###plt.plot(probe_ttl_df['packet_size'], res.fittedvalues, '-');
+            if options.plot:
+                plt.plot(probe_ttl_df['packet_size'], probe_ttl_df['min_rtt'], 'o', color = 'k')
+                plt.plot(probe_ttl_df['packet_size'], res.fittedvalues, '-');
 
             #ABLine2D(res.params['packet_size'], res.params['Intercept'])
 
@@ -389,11 +405,11 @@ def run_pathchar(trace_rtt, uuid):
             if options.verbose:
               print " Not enough input to run pathchar: hop did not reply to traceroute"
             slope_intercept[ttl] = [0, 0]
-
-###        plt.xlabel("Packet Size [bytes]")
-###        plt.ylabel("RTT [ms]")
-###        plt.title("PathChar: Curve Fitting for Probe " + str(probe))
-###        plt.show()
+    if options.plot:
+        plt.xlabel("Packet Size [bytes]")
+        plt.ylabel("RTT [ms]")
+        plt.title("PathChar: Curve Fitting for Probe " + str(uuid))
+        plt.show()
 
 #3)
     bw_lat = dict()
@@ -542,11 +558,13 @@ def run_Revelio_characterization(data_uuid, uuid, deployment):
     # check if the IP addresses after the access link are SHARED or PRIVATE
     shared_ip = private_ip = 0
     if pathchar>0 and IPAddress(local_ip) in PRIVATE:
+      IP_in_ISP = set()
+      for key in trace_L3_IP.keys()[pathchar:]:
+          IP_in_ISP = set(list(IP_in_ISP) + list(trace_L3_IP[key][random.choice(trace_L3_IP[key].keys())]))
       if options.verbose:
-        # key = trace_L3_IP.keys()[pathchar+1]
         print "The IP Addresses after the access link for device " + str(uuid) + " : " + \
-          str([trace_L3_IP[key][random.choice(trace_L3_IP[key].keys())] for key in trace_L3_IP.keys()[pathchar:]])
-      trace_fix = trace_L3_IP[pathchar][120]
+          ",".join([str(x) for x in IP_in_ISP])
+      trace_fix = trace_L3_IP[pathchar][random.choice(trace_L3_IP[pathchar].keys())]
       if trace_fix:
         for ip in trace_fix:
           if ip:
@@ -558,6 +576,12 @@ def run_Revelio_characterization(data_uuid, uuid, deployment):
               shared_ip = 0
       else: # we get no IP address in the traceroutes at TTL = pathchar
         private_ip = shared_ip = 0
+      for ip in IP_in_ISP:
+        try:
+          if IPAddress(ip) in SHARED:
+            shared_ip = 1 
+        except:
+          continue 
     elif IPAddress(local_ip) in SHARED:
         shared_ip = 1 # the local IP is shared (there is no NAT though in the home -- just the one in the access link) 
         private_ip = 0 
@@ -635,6 +659,13 @@ data = pd.read_csv(input_data, sep = ";") # we read the data from a CSV file
 # for each boxid in the database, we need to run the same detection
 deployment = data.revelio_type.unique()
 
+if options.metadata:
+    parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+else:
+    parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n") #TODO: add orgAS and ISP name here -- use the other script
+
+
+
 for uuid in data.boxid.unique():
     revelio_client = Device(uuid)
     #separate the subset of Revelio results coming from a single device 
@@ -654,7 +685,7 @@ for uuid in data.boxid.unique():
         print "REVELIO results: " + str(revelio_client.nat444)
 
     if options.metadata:
-        parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+        #parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
         parsed.write(str(uuid) + "," + str(list(metadata[metadata.Unit_ID==uuid]['ISP'])) + "," + \
           str(list(metadata[metadata.Unit_ID==uuid]['Technology'])) + "," + \
           str(list(metadata[metadata.Unit_ID==uuid]['Region'])) + "," + \
@@ -664,7 +695,7 @@ for uuid in data.boxid.unique():
           str(list(metadata[metadata.Unit_ID==uuid].Region)) + ";" + \
           str(revelio_client.nat444) + "\n" )
     else:
-        parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+        #parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
         parsed.write(str(uuid) + "," + \
          ",".join([str(x) for x in revelio_client.revelio.get_state_values()]) + "\n" )
         output.write(str(revelio_client.nat444) + "\n")
