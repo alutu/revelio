@@ -35,7 +35,8 @@ CGNATDETECT, # should have here the version of Revelio that ran (e.g., Revelio-v
  (null)|Traceroute complete.|"
 """
 
-### in version 5.4 we address the numerous inconsistencies that we findin the data: e.g., some probes do not run all the 21 acket sizes 
+### in version 5.4 we address the numerous inconsistencies that we findin the data
+### e.g., some probes do not run all the 21 acket sizes 
 
 import sys, re
 from netaddr import *
@@ -51,6 +52,7 @@ import statsmodels.api as sm
 from math import *
 import sqlite3 # use this to use as input the sqlite file from the webapp
 from optparse import OptionParser
+import random
 
 dslite = IPNetwork("192.0.0.0/29")
 SHARED = IPNetwork("100.64.0.0/10")
@@ -60,7 +62,7 @@ PRIVATE = IPSet([IPNetwork("192.168.0.0/16"), IPNetwork("10.0.0.0/8"), IPNetwork
 # private3 = IPNetwork("172.16.0.0/12")
 
 
-# the device with the highest number of repetitions (1738) for Revelio is 
+# the device with the highest number of repetitions (1738) for Revelio-WINDOWS is 
 # 61d50f9eed6911e5aab390b11c304ecd (MAC Address: 54-E6-FC-81-38-5E) 
 
 class Device(object):
@@ -79,7 +81,7 @@ class Device(object):
 # the tests we perform in Revelio use the following information: local_ip, gra, upnp, pathchar, trace_gra, shared_ip, private_ip 
 #TODO: the output should be stored in the dabase, as a part of the flask webapp
 class Revelio(object):
-  def __init__(self, local_ip, gra, upnp, pathchar, trace_gra, shared_ip, private_ip):
+  def __init__(self, local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip):
       #self.boxid = boxid # this is the uuid of the devide running Revelio
       self.local_ip = local_ip # the local IP address of the device running the Revelio client (it can be a set of interfaces and IP addresses)
       self.gra = gra # the Globally Routable Address
@@ -87,13 +89,18 @@ class Revelio(object):
       self.pathchar = pathchar # the location of the access link reported to the Device running Revelio
       self.trace_gra = trace_gra # number of hops replying to the traceroute to the GRA
                                  # have this as a dict -- {number_hops: x, timeout: True/False}
+      self.ttl_gra = ttl_gra
       self.shared_ip = shared_ip # the shared_ips we detect in the traceroute to the fix target in Level3
       self.private_ip = private_ip # the private_ips we detect in the traceroute to the fix target in Level3
 
   def get_state(self):
-      info = ["local_ip", "gra", "upnp", "pathchar", "trace_gra", "shared_ip", "private_ip"]
-      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.shared_ip, self.private_ip]
+      info = ["local_ip", "gra", "upnp", "pathchar", "trace_gra", "ttl_gra", "shared_ip", "private_ip"]
+      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip]
       return {label:value for label, value in zip(info, state)} 
+
+  def get_state_values(self):
+      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip]
+      return state
 
 # we define the Revelio tests in the following, based on the information we get from each device running the Revelio client
 
@@ -102,16 +109,18 @@ class Revelio(object):
       if self.local_ip not in PRIVATE: #  and self.local_ip not in shared_ip:
         if options.verbose:
           print "There is no NAT in the home network."
-        return False # FALSE -- no NAT444
+        return "No" # FALSE -- no NAT444
       elif self.local_ip in PRIVATE:
         if options.verbose:
           print "There is one level of NAT in the home network."
-        return True
+        return "Yes"
 
   # this test verifies if the GRA is configured by a device after the access link (i.e., in the access network of the ISP)
   def Traceroute_GRA(self):
-    if self.trace_gra >0:
-      if self.trace_gra >= self.pathchar:
+    #TODO: make sure that this is correct
+    if self.trace_gra == self.ttl_gra: # all the hops we test with traeroute reply with an IP
+                                       # traceroute does not timeout
+      if self.ttl_gra >= self.pathchar:
         if options.verbose:
           print "NAT444 True: GRA is beyond the access link"
         return True
@@ -119,6 +128,13 @@ class Revelio(object):
         if options.verbose:
           print "NAT444 False: GRA is before the access link."
         return False
+    elif self.ttl_gra < 16 and self.trace_gra < self.ttl_gra: # traceroute does not timeout 
+                                                              # but some hops do not reply to the traceroute probe
+      if self.ttl_gra >= self.pathchar:
+        if options.verbose:
+          print "NAT444 True: GRA is beyond the access link"
+        return True
+
     else:
       if options.verbose:
         print "NAT444 inconclusive: we cannot say if there is a NAT444 only from this info"
@@ -128,15 +144,20 @@ class Revelio(object):
   # if the two IPs match, there is no CGN
   # if the two IPs don't match and the access link is between them, there is a CGN
   def UPnP_GRA(self):
-      if self.upnp[0] in self.gra:
+    if type(self.gra) is str:
+      self.gra = [self.gra, ]
+    if type(self.upnp) is str:
+      self.upnp = [self.upnp, ]
+    if self.upnp: # the UPnP address is not None
+      if set(self.upnp).intersection(self.gra): # if the GRA and the UPnP mapped address are the same
         if options.verbose:
           print "NAT444 False: The GRA matches the UPnP retrieved address on the CPE."
         return False
-      elif self.upnp != "noIGD" and not set(self.gra).intersection(self.upnp) and self.pathchar == 2:
+      elif self.upnp != "noIGD" and "0.0.0.0" not in self.upnp and (not set(self.gra).intersection(self.upnp)) and self.pathchar == 2:
         if options.verbose:
           print "NAT444 True: The GRA does not match the UPnP retrieved address on the CPE, access link immediately after the CPE."
         return True
-      elif self.upnp != "noIGD" and not set(self.gra).intersection(self.upnp) and self.pathchar <= self.trace_gra:
+      elif self.upnp != "noIGD" and "0.0.0.0" not in self.upnp and not set(self.gra).intersection(self.upnp) and self.pathchar <= self.trace_gra:
         if options.verbose:
           print "NAT444 True: The GRA does not match the UPnP retrieved address on the CPE, access link immediately after the CPE."
         return True
@@ -144,13 +165,29 @@ class Revelio(object):
         if options.verbose:
           print "NAT444 Inconclusive: UPnP not supported and cannot interpret results"
         return -1
+    else:
+      if options.verbose:
+        print "NAT444 Inconclusive: UPnP not supported and cannot interpret results"
+      return -1
 
   # this test checks the presence of shared IP addresses after the access link (i.e., in the access network of the ISP)
   def SharedIPs_in_ISP(self):
+      if self.upnp:
+        if type(self.upnp) is str:
+          self.upnp = [self.upnp, ]
+
       if self.shared_ip == 0:
-        return False
+        for ip in self.upnp:
+          if IPAddress(ip) in SHARED:
+            return True
+
+        if self.local_ip:
+          if IPAddress(self.local_ip) in SHARED:
+            return True
       elif self.shared_ip:
         return True
+      else:
+        return False
 
   # this test checks the presence of private IP addresses after the access link (i.e., in the access network of the ISP)
   def PrivateIPs_in_ISP(self):
@@ -175,7 +212,7 @@ def parse_trace(trace, deployment):
               hop_rtt = float(hop.split()[1].split("ms")[0]) # the RTT in ms
             else:
               hop_ip = None
-              hop_rtt = 0
+              hop_rtt = None
             if ttl not in trace_rtt:
               trace_rtt[ttl] = dict()
               trace_IPs[ttl] = dict()
@@ -214,7 +251,7 @@ def parse_trace(trace, deployment):
               hop_rtt = float(hop.split()[2]) # the RTT in ms
             else:
               hop_ip = None
-              hop_rtt = 0
+              hop_rtt = None
             if ttl not in trace_rtt:
               trace_rtt[ttl] = dict()
               trace_IPs[ttl] = dict()
@@ -230,11 +267,21 @@ def parse_trace(trace, deployment):
               if packet_size not in trace_rtt[ttl]:
                 trace_rtt[ttl][packet_size] = set()
                 trace_IPs[ttl][packet_size] = set()
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
+                if ttl>1:
+                  if hop_ip not in trace_rtt[ttl-1][packet_size]: # if the same IP appeared at the previous hop, discard traceroute run
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
+                else:
+                  trace_rtt[ttl][packet_size].add(hop_rtt)
+                  trace_IPs[ttl][packet_size].add(hop_ip)
               else:
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
+                if ttl>1:
+                  if hop_ip not in trace_rtt[ttl-1][packet_size]: # if the same IP appeared at the previous hop, discard traceroute run
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
+                else:
+                  trace_rtt[ttl][packet_size].add(hop_rtt)
+                  trace_IPs[ttl][packet_size].add(hop_ip)
   elif deployment == "ANDROID": # TODO: modify this to parse the Android output
       for i in trace.index: # for each run of the traceroute
         packet_size = trace.trace_packetSize[i] # get the packet size
@@ -246,7 +293,7 @@ def parse_trace(trace, deployment):
               hop_rtt = hop.split()[1].split("ms")[0] # the RTT in ms
             else:
               hop_ip = None
-              hop_rtt = 0
+              hop_rtt = None
             if ttl not in trace_rtt:
               trace_rtt[ttl] = dict()
               trace_IPs[ttl] = dict()
@@ -302,7 +349,10 @@ def run_pathchar(trace_rtt, uuid):
 #1)
         for packet_size in ttl_data.keys():
             if packet_size >100 : # exclude the traceroute to the STUN mapped address which is being done with packet_size = 100
-                SORTTs[ttl][packet_size] = min(ttl_data[packet_size])
+                if [x for x in ttl_data[packet_size] if x is not None]:
+                  SORTTs[ttl][packet_size] = min([x for x in ttl_data[packet_size] if x is not None]) #TODO: check this!
+                else: # if the traceroute always times out at the same hop
+                  SORTTs[ttl][packet_size] = 0
             else:
                 continue 
 #2)
@@ -424,7 +474,7 @@ def run_pathchar(trace_rtt, uuid):
     return int(access_link)
 
 # parse the raw Revelio data from a single device (identified by a uuid) to output a Revelio object
-def run_Revelio_charact(data_uuid, uuid, deployment):
+def run_Revelio_characterization(data_uuid, uuid, deployment):
     # the header of the input file: 
     # boxid,revelio_type,timestamp,local_IP,IGD,STUN_mapped,trace_packetSize,traceroute_result
     if options.verbose:
@@ -432,16 +482,18 @@ def run_Revelio_charact(data_uuid, uuid, deployment):
     nr_runs = len(list(data_uuid.timestamp.unique()))
     
     # get the local IP address
-    local = data_uuid.local_IP[0]
+    all_local = list(data_uuid.local_IP.unique())
+    print str(all_local)
+    local = all_local[0]
     if "br-lan:" in str(local): # lo:127.0.0.1,br-lan:192.168.2.32,br-lan:1:10.98.11.62,
         IF = str(local.split(",")[1])
         local_ip = IF.split(":")[1]
         if options.verbose:
             print "Local IP address on the device running the Revelio Client: " + str(local_ip)
-    elif "eth0" in local:
-        local_ip = local.split(",")[-1].split(":")[0]
+    elif "eth0" in str(local):
+        local_ip = local.split(",")[2].split(":")[1]
     else:
-        local_ip = local[0]
+        local_ip = local
 
     upnp_output = data_uuid.IGD.unique()
     upnp = [] # get all the WAN-facing IP addresses of the device connected to Revelio
@@ -454,7 +506,7 @@ def run_Revelio_charact(data_uuid, uuid, deployment):
         if options.verbose:
           print "The device is not connected to an IGD [UPnP is not (always) supported by the CPE!]"
 
-    stun_output = data_uuid.STUN_mapped.unique()
+    stun_output = list(data_uuid.STUN_mapped.unique())
     stun = [] # the set of GRAs we retrieve
     for res in stun_output:
       gra = res.split(" ")[1].split(":")[0] # this is the GRA mapped to the device running the Revelio client
@@ -467,9 +519,15 @@ def run_Revelio_charact(data_uuid, uuid, deployment):
       print "Traceroute to GRA: "
       print "IPs:" + str(trace_GRA_IP)
       print "RTTs:" + str(trace_GRA_rtt)
+    IPs = []
     if trace_GRA_IP.keys():
-      trace_gra = len(trace_GRA_IP.keys()) # get the number of hops that replied to the traceroute to the GRA
+      ttl_gra = len(trace_GRA_IP.keys()) # this is the total number of different TTLs we used to run traceroute
+                                           # it is like the timeout_to_MA from the previous version
+      for x in trace_GRA_IP.keys():
+        IPs = IPs + list(trace_GRA_IP[x][100])
+      trace_gra = len(set(IPs)) # this should be 0 is the traceroute doesn't run 
     else:
+      ttl_gra = 0 # traceroute to GRA did not run at all 
       trace_gra = 0
     
     # get the location of the access link
@@ -485,16 +543,19 @@ def run_Revelio_charact(data_uuid, uuid, deployment):
     shared_ip = private_ip = 0
     if pathchar>0 and IPAddress(local_ip) in PRIVATE:
       if options.verbose:
-        print "The IP Addresses after the access link are: " + str([trace_L3_IP[key][120] for key in trace_L3_IP.keys()[pathchar:]])
+        # key = trace_L3_IP.keys()[pathchar+1]
+        print "The IP Addresses after the access link for device " + str(uuid) + " : " + \
+          str([trace_L3_IP[key][random.choice(trace_L3_IP[key].keys())] for key in trace_L3_IP.keys()[pathchar:]])
       trace_fix = trace_L3_IP[pathchar][120]
       if trace_fix:
         for ip in trace_fix:
-          if IPAddress(ip) in PRIVATE:
-            private_ip = 1   
-            shared_ip = 0
-          elif IPAddress(ip) in SHARED:
-            private_ip = 0
-            shared_ip = 0
+          if ip:
+            if IPAddress(ip) in PRIVATE:
+              private_ip = 1   
+              shared_ip = 0
+            elif IPAddress(ip) in SHARED:
+              private_ip = 0
+              shared_ip = 0
       else: # we get no IP address in the traceroutes at TTL = pathchar
         private_ip = shared_ip = 0
     elif IPAddress(local_ip) in SHARED:
@@ -503,16 +564,16 @@ def run_Revelio_charact(data_uuid, uuid, deployment):
     else:
         shared_ip = private_ip = 0 # we don't find anyhting
     # build the Revelio state -- and pass it when building the device
-    revelio_state =  Revelio(local_ip, gra, upnp, pathchar, trace_gra, shared_ip, private_ip)
+    # TODO: add the ttl_gra to the state here
+    revelio_state =  Revelio(local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip)
     return revelio_state
 
 # this is the function that checks the results of the Revelio Discovery tests, compares them and gives the result
 # we then store this results in the device.nat444 field of the Device object 
-def run_Revelio_discovery(revelio_state):
-    print "NAT_CPE:" + str(revelio_state.NAT_test()) + "; Trace_GRA:" + str(revelio_state.Traceroute_GRA()) + \
-     "; UPnP:" + str(revelio_state.UPnP_GRA()) + "; Shared_IP: " + str(revelio_state.shared_ip) + \
-      "; Private_after_GRA:" + str(revelio_state.PrivateIPs_in_ISP())
-    return 1
+def run_Revelio_discovery(revelio_state, uuid):
+    return str(uuid) + "; NAT_CPE: " + str(revelio_state.NAT_test()) + "; Trace_GRA: " + str(revelio_state.Traceroute_GRA()) + \
+     "; UPnP: " + str(revelio_state.UPnP_GRA()) + "; Shared_IP: " + str(revelio_state.SharedIPs_in_ISP()) + \
+      "; Private_after_AccessLink: " + str(revelio_state.PrivateIPs_in_ISP())
 
 
 #TODO: add an option to read the input raw data from an sqlite file (e.g., leone.db)
@@ -552,7 +613,7 @@ if not options.out_file:
 else:
     out_file = options.out_file
 if not options.parsed_file:
-    parsed_file = "revelio.parsed_state"
+    parsed_file = "revelio.state"
 else:
     parsed_file = options.parsed_file
 parsed = open(parsed_file, "w")
@@ -578,20 +639,35 @@ for uuid in data.boxid.unique():
     revelio_client = Device(uuid)
     #separate the subset of Revelio results coming from a single device 
     if options.verbose:
-        print "Parsing Revelio results from device with unique ID " + str(uuid)
+        print "###\nParsing Revelio results from device with unique ID " + str(uuid)
     if options.metadata:
       if options.verbose:
-        print "Device Medatada: \n" +  str(metadata[metadata.Unit_ID==uuid]) #";".join([str(x) for x in metadata[metadata.Unit_ID==str(uuid)]])
-      metadata_uuid = metadata[metadata.Unit_ID==uuid]
+        print "Device " + str(uuid) +  " Medatada: \n" +  str(metadata[metadata.Unit_ID==uuid]) #";".join([str(x) for x in metadata[metadata.Unit_ID==str(uuid)]])
 
     data_uuid = data[data.boxid == uuid]
     
     # parse all the raw Revelio data we collect from the device
-    revelio_client.revelio = run_Revelio_charact(data_uuid, uuid, deployment)
-    print "REVELIO state: " + str(revelio_client.revelio.get_state())
-    run_Revelio_discovery(revelio_client.revelio)
-    #parsed.write(" ".join(revelio_client.revelio))
-    #output.write(str(run_Revelio_discovery(revelio_state)))
+    revelio_client.revelio = run_Revelio_characterization(data_uuid, uuid, deployment)
+    revelio_client.nat444 = run_Revelio_discovery(revelio_client.revelio, uuid)
+    if options.verbose:
+        print "REVELIO state " + str(uuid) + " : " + str(revelio_client.revelio.get_state())
+        print "REVELIO results: " + str(revelio_client.nat444)
+
+    if options.metadata:
+        parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+        parsed.write(str(uuid) + "," + str(list(metadata[metadata.Unit_ID==uuid]['ISP'])) + "," + \
+          str(list(metadata[metadata.Unit_ID==uuid]['Technology'])) + "," + \
+          str(list(metadata[metadata.Unit_ID==uuid]['Region'])) + "," + \
+         ",".join([str(x) for x in revelio_client.revelio.get_state_values()]) + "\n" )
+        output.write(str(list(metadata[metadata.Unit_ID==uuid].ISP)) + ";" + \
+          str(list(metadata[metadata.Unit_ID==uuid].Technology)) + ";" + \
+          str(list(metadata[metadata.Unit_ID==uuid].Region)) + ";" + \
+          str(revelio_client.nat444) + "\n" )
+    else:
+        parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+        parsed.write(str(uuid) + "," + \
+         ",".join([str(x) for x in revelio_client.revelio.get_state_values()]) + "\n" )
+        output.write(str(revelio_client.nat444) + "\n")
 
 
 # if __name__ == '__main__':     #only when run from cmd line
