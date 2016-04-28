@@ -81,7 +81,7 @@ class Device(object):
 # the tests we perform in Revelio use the following information: local_ip, gra, upnp, pathchar, trace_gra, shared_ip, private_ip 
 #TODO: the output should be stored in the dabase, as a part of the flask webapp
 class Revelio(object):
-  def __init__(self, local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip):
+  def __init__(self, local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip, nr_runs):
       #self.boxid = boxid # this is the uuid of the devide running Revelio
       self.local_ip = local_ip # the local IP address of the device running the Revelio client (it can be a set of interfaces and IP addresses)
       self.gra = gra # the Globally Routable Address
@@ -92,14 +92,15 @@ class Revelio(object):
       self.ttl_gra = ttl_gra
       self.shared_ip = shared_ip # the shared_ips we detect in the traceroute to the fix target in Level3
       self.private_ip = private_ip # the private_ips we detect in the traceroute to the fix target in Level3
+      self.nr_runs = nr_runs
 
   def get_state(self):
-      info = ["local_ip", "gra", "upnp", "pathchar", "trace_gra", "ttl_gra", "shared_ip", "private_ip"]
-      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip]
+      info = ["local_ip", "gra", "upnp", "pathchar", "trace_gra", "ttl_gra", "shared_ip", "private_ip", "nr_runs"]
+      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip, self.nr_runs]
       return {label:value for label, value in zip(info, state)} 
 
   def get_state_values(self):
-      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip]
+      state = [self.local_ip, self.gra, self.upnp, self.pathchar, self.trace_gra, self.ttl_gra, self.shared_ip, self.private_ip, self.nr_runs]
       return state
 
 # we define the Revelio tests in the following, based on the information we get from each device running the Revelio client
@@ -117,25 +118,30 @@ class Revelio(object):
 
   # this test verifies if the GRA is configured by a device after the access link (i.e., in the access network of the ISP)
   def Traceroute_GRA(self): #TODO: make sure that this is correct
-    if self.trace_gra == self.ttl_gra and self.pathchar!=0: # all the hops we test with traeroute reply with an IP
-                                                            # traceroute does not timeout
-      if self.ttl_gra ==1:
+    if self.trace_gra == self.ttl_gra: # all the hops we test with traceroute reply with an IP
+                                                            # i.e., if the traceroute does not timeout
+      if self.trace_gra == 1: # if the last hop that replies the traceroute to the GRA is the first hop after the revelio client
         return False
-      elif self.ttl_gra >= self.pathchar :
+      elif self.pathchar > 0 and self.trace_gra > 0 :
+        if self.trace_gra >= self.pathchar : # if the last hop repliying to traceroute is after the access link
+          if options.verbose:
+            print "NAT444 True: GRA is AFTER the access link."
+          return True
+        elif self.trace_gra < self.pathchar:
+          if options.verbose:
+            print "NAT444 False: GRA is BEFORE the access link."
+          return False
+    elif self.trace_gra >0 and self.pathchar!=0: # if traceroute to GRA did not necessarily reach the GRA (ttl_gra can be 16) 
+                                                 # and we detected the access link
+      if self.trace_gra >= self.pathchar:
         if options.verbose:
           print "NAT444 True: GRA is AFTER the access link."
         return True
-      elif self.ttl_gra < self.pathchar:
+      else:
         if options.verbose:
           print "NAT444 False: GRA is BEFORE the access link."
         return False
-    elif self.ttl_gra < 16 and self.pathchar!=0: # traceroute does not timeout 
-                             # but some hops do not reply to the traceroute probe
-      if self.ttl_gra >= self.pathchar:
-        if options.verbose:
-          print "NAT444 True: GRA is AFTER the access link."
-        return True
-    else:
+    else: # either traceroute to GRA did not run or we were not able to detect the access link
       if options.verbose:
         print "NAT444 inconclusive: we cannot say if there is a NAT444 only from this info"
       return -1 # we cannot say if there is a NAT444 only from this info
@@ -155,12 +161,13 @@ class Revelio(object):
         return False
       elif self.upnp != "noIGD" and "0.0.0.0" not in self.upnp and (not set(self.gra).intersection(self.upnp)) and self.pathchar == 2:
         if options.verbose:
-          print "NAT444 True: The GRA does not match the UPnP retrieved address on the CPE, access link immediately after the CPE."
+          print "NAT444 True: The GRA does not match the IP address on the WAN-facing interface of the CPE we retrieve with UPnP, access link immediately after the CPE (i.e., the CPE is the Service Demarcation Device)."
         return True
-      elif self.upnp != "noIGD" and "0.0.0.0" not in self.upnp and not set(self.gra).intersection(self.upnp) and self.pathchar <= self.trace_gra:
-        if options.verbose:
-          print "NAT444 True: The GRA does not match the UPnP retrieved address on the CPE, access link immediately after the CPE."
-        return True
+      ## I eliminate the following result because this is part of the Traceroute to the GRA already 
+      #elif self.upnp != "noIGD" and "0.0.0.0" not in self.upnp and not set(self.gra).intersection(self.upnp) and self.pathchar <= self.trace_gra:
+      #  if options.verbose:
+      #    print "NAT444 True: The GRA does not match the UPnP retrieved address on the CPE, access link immediately after the CPE."
+      #  return True
       else:
         if options.verbose:
           print "NAT444 Inconclusive: UPnP not supported and cannot interpret results"
@@ -203,44 +210,52 @@ class Revelio(object):
 def parse_trace(trace, deployment): 
   trace_rtt = {}
   trace_IPs = {}
-  if deployment == "WINDOWS": # parse the traceroute of the Revelio client for Windows
+
+  if "WINDOWS" in str(deployment): # parse the traceroute of the Revelio client for Windows
                               # WINDOWS: x376,"(null)|Tracing route to 4.69.202.89 with TTL of 16:|(null)| 1  2ms    192.168.1.1| 2  40ms   87.222.192.1|
       for i in trace.index: # for each run of the traceroute
         packet_size = trace.trace_packetSize[i] # get the packet size
         traceroute = trace.traceroute_result[i].split("|") # get the output per hop of the traceroute
         for hop in traceroute[3:-1]: # first three fields are irrelevant in the output of the windows traceroute
-            ttl = hop.split()[0] # hop number (TTL)
-            if "Request timed out." not in hop:
-              try:
-                hop_ip = hop.split()[2] # the hop IP
-                hop_rtt = float(hop.split()[1].split("ms")[0]) # the RTT in ms
-              except:
-                if options.verbose:
-                  print "Traceroute output incomplete!"
-                continue
+            #print str(hop)
+            if "null" not in str(hop) and "Traceroute complete." not in str(hop) and "reports" not in str(hop):
+                ttl = int(hop.split()[0]) # hop number (TTL)
+                if "Request timed out." not in hop:
+                  try:
+                      hop_ip = hop.split()[2] # the hop IP
+                      if float(hop.split()[1].split("ms")[0]) > 0:
+                        hop_rtt = float(hop.split()[1].split("ms")[0]) # the RTT in ms
+                      else:
+                        hop_rtt = 0.1
+                  except:
+                      if options.verbose:
+                        print "Exception! Traceroute output incomplete!"
+                      continue
+                else:
+                  hop_ip = None
+                  hop_rtt = None
+                if ttl not in trace_rtt:
+                  trace_rtt[ttl] = dict()
+                  trace_IPs[ttl] = dict()
+                  if packet_size not in trace_rtt[ttl]:
+                    trace_rtt[ttl][packet_size] = set()
+                    trace_IPs[ttl][packet_size] = set()
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
+                  else:
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
+                else:
+                  if packet_size not in trace_rtt[ttl]:
+                    trace_rtt[ttl][packet_size] = set()
+                    trace_IPs[ttl][packet_size] = set()
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
+                  else:
+                    trace_rtt[ttl][packet_size].add(hop_rtt)
+                    trace_IPs[ttl][packet_size].add(hop_ip)
             else:
-              hop_ip = None
-              hop_rtt = None
-            if ttl not in trace_rtt:
-              trace_rtt[ttl] = dict()
-              trace_IPs[ttl] = dict()
-              if packet_size not in trace_rtt[ttl]:
-                trace_rtt[ttl][packet_size] = set()
-                trace_IPs[ttl][packet_size] = set()
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
-              else:
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
-            else:
-              if packet_size not in trace_rtt[ttl]:
-                trace_rtt[ttl][packet_size] = set()
-                trace_IPs[ttl][packet_size] = set()
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
-              else:
-                trace_rtt[ttl][packet_size].add(hop_rtt)
-                trace_IPs[ttl][packet_size].add(hop_ip)
+              continue
   elif "FCC" in str(deployment): # parse the traceroute results from the Revelio client for the FCC SK panel
                                  # example of traceroute results:
                                  ### traceroute to 4.69.202.89 (4.69.202.89), 16 hops max, 696 byte packets| 
@@ -288,19 +303,14 @@ def parse_trace(trace, deployment):
                   trace_rtt[ttl][packet_size].add(hop_rtt)
                   trace_IPs[ttl][packet_size].add(hop_ip)
               else:
-                if ttl>1:
-                  if hop_ip not in trace_rtt[ttl-1][packet_size]: # if the same IP appeared at the previous hop, discard traceroute run
-                    trace_rtt[ttl][packet_size].add(hop_rtt)
-                    trace_IPs[ttl][packet_size].add(hop_ip)
-                else:
-                  trace_rtt[ttl][packet_size].add(hop_rtt)
-                  trace_IPs[ttl][packet_size].add(hop_ip)
+                trace_rtt[ttl][packet_size].add(hop_rtt)
+                trace_IPs[ttl][packet_size].add(hop_ip)
   elif deployment == "ANDROID": # TODO: modify this to parse the Android output
       for i in trace.index: # for each run of the traceroute
         packet_size = trace.trace_packetSize[i] # get the packet size
         traceroute = trace.traceroute_result[i].split("|") # get the output per hop of the traceroute
         for hop in traceroute[3:-1]: # first three fields are irrelevant in the output of the windows traceroute
-            ttl = hop.split()[0] # hop number (TTL)
+            ttl = int(hop.split()[0]) # hop number (TTL)
             if "Request timed out." not in hop:
               hop_ip = hop.split()[2] # the hop IP
               hop_rtt = hop.split()[1].split("ms")[0] # the RTT in ms
@@ -346,6 +356,11 @@ OUTPUT: position of the access link from the device running the Revelio client: 
                 # i = the access link is after the i-th hop from the device running the Revelio client
 '''
 def run_pathchar(trace_rtt, uuid):
+  if not trace_rtt:
+    if options.verbose:
+      print "Pathchar FAILED: No traceroute input for device " + str(uuid)
+    return 0
+  else:
     SORTTs = dict() # for each TTL and for each packet size, we store the minimum RTT we were able to measure
     slope_intercept = dict() # for each TTL, keep the parameters of the fitted cure
     access_link = 0 # the position of the access link reported to the device running Revelio
@@ -371,11 +386,12 @@ def run_pathchar(trace_rtt, uuid):
             else:
                 continue 
 #2)
-        # normally, we should have input for 21 different packet sizes, check that we do, otherwise discard since the fitting cannot be done
+        # normally, we should have input for 21 different packet sizes, check that we do at least for 19, otherwise discard since the fitting cannot be done
         if options.verbose:
-          print "Number of packet sizes tested: " + str(len(zip([packet_size for packet_size in SORTTs[ttl]], [SORTTs[ttl][packet_size] for packet_size in SORTTs[ttl]])))
-        if len(zip([packet_size for packet_size in SORTTs[ttl]], [SORTTs[ttl][packet_size] for packet_size in SORTTs[ttl]])) >= 19 : 
-            probe_ttl_df = DataFrame(SORTTs[ttl].items(), columns = ['packet_size', 'min_rtt'])  
+          print "Number of packet sizes tested: " + str(len(zip([packet_size for packet_size in SORTTs[ttl] if SORTTs[ttl][packet_size] >0], [SORTTs[ttl][packet_size] for packet_size in SORTTs[ttl] if SORTTs[ttl][packet_size] >0] )))
+        if len(zip([packet_size for packet_size in SORTTs[ttl] if SORTTs[ttl][packet_size] >0], [SORTTs[ttl][packet_size] for packet_size in SORTTs[ttl] if SORTTs[ttl][packet_size] >0] )) >= 19 : 
+            probe_ttl_DF = DataFrame(SORTTs[ttl].items(), columns = ['packet_size', 'min_rtt'])  
+            probe_ttl_df = probe_ttl_DF[probe_ttl_DF.min_rtt > 0] # we filter out non-zeros
 
             ##print "Data Frame empty: " + str(len(probe_ttl_df.as_matrix()))
             # check that we do have data to work with
@@ -413,7 +429,10 @@ def run_pathchar(trace_rtt, uuid):
 
 #3)
     bw_lat = dict()
-    if slope_intercept[1][0]>0: ### we control for values of 0 
+    if options.verbose:
+      print "***** slope, intercept for fitted curves at each TTL: " +str(slope_intercept)
+      print "***** We were able to perform the curve fitting for the following links: " + str(links)
+    if slope_intercept[1][0] > float(0): ### we control for values of 0
         bw = 8/(1000*slope_intercept[1][0])
     else:
         bw = 0
@@ -422,50 +441,80 @@ def run_pathchar(trace_rtt, uuid):
     else:
         lat = 0
     bw_lat[1] = [bw, lat] # values for TTL = 1 --> the first link
-    print str(bw_lat)
+
 
     if options.verbose:
-      print "Differentiating to obtain BW and LAT estimates for probe " + str(uuid)
+      print "\nDifferentiating to obtain BW and LAT estimates for probe " + str(uuid)
       #print "TTL vector: " + str(sort(data[data['Probe_ID'] == probe]['TTL'].unique()))
       print " Link 1: BW [Mb] , LAT[ms]: " + str(bw_lat[1])
 
-    for ttl in list(links):
-      if ttl+1 < len(list(links)):
-# add condition here to take only the non-zero values of the RTT
-          if slope_intercept[ttl+1][0] == 0 or slope_intercept[ttl+1][0] == 'nan':
-              slope_intercept[ttl+1][0] = slope_intercept[ttl][0]
-          if slope_intercept[ttl+1][0] <= slope_intercept[ttl][0]:
-            try:
-              if (slope_intercept[ttl][0] - slope_intercept[ttl+1][0])/slope_intercept[ttl][0] < 0.5:
-                  bw = bw_lat[ttl][0]
-              else:
-                  bw = 8/(1000*(slope_intercept[ttl+1][0] - slope_intercept[ttl][0]))
-            except:
+    for ttl in list(slope_intercept.keys()):
+      print "TTL: " + str(ttl+1)
+      if ttl+1 < len(list(slope_intercept.keys())):
+          # TRANSMISSION DELAY [packet_size/BW]
+          if slope_intercept[ttl+1][0] == 0 and slope_intercept[ttl+1][0] == slope_intercept[ttl][0]: # if the slope at consecutive TTLs is 0, we cannot calculate the BW
+              if options.verbose:
+                "Traceroute gave RTT = 0 in consecutive hops. Fixing Transmission Delay at 0."
+              bw = 0
+              #break
+          elif slope_intercept[ttl+1][0]==0 and slope_intercept[ttl][0] > 0: # if in the previous hop we did have a value for the transmission delay, in the current hop we will have at least the same
+              #slope_intercept[ttl+1][0] = slope_intercept[ttl][0]
+              bw =0
+              #break
+          elif slope_intercept[ttl+1][0] < slope_intercept[ttl][0]:  # if the transmission delay at ttl+1 is smaller than at ttl ==> correct the data to become equal
+              bw = 0
+          elif slope_intercept[ttl+1][0] == slope_intercept[ttl][0]:
               bw = 0
           else:
               bw = 8/(1000*(slope_intercept[ttl+1][0] - slope_intercept[ttl][0]))
-
-          if slope_intercept[ttl +1][1] == 0 or slope_intercept[ttl +1][1] == 'nan':
-              slope_intercept[ttl +1][1] = slope_intercept[ttl][1]
-          if slope_intercept[ttl +1][1] <= slope_intercept[ttl][1]:
-            try:
-              if (slope_intercept[ttl][1] - slope_intercept[ttl+1][1])/slope_intercept[ttl][1] < 0.5:
-                  lat = bw_lat[ttl][1]
-              else:
-                  lat = (slope_intercept[ttl +1][1] - slope_intercept[ttl][1])/2
-            except:
+          
+          # PROPAGATION DELAY [LAT]
+          if slope_intercept[ttl+1][1] < 0:
+            slope_intercept[ttl+1][1] = - slope_intercept[ttl+1][1]
+          if slope_intercept[ttl+1][1] == 0 and slope_intercept[ttl+1][1] == slope_intercept[ttl][1]:
+            if options.verbose:
+                "Traceroute gave RTT = 0 in consecutive hops. Fixing Propagation Delay at 0."
+            lat = 0
+            #break
+          elif slope_intercept[ttl +1][1]==0 and slope_intercept[ttl][1] > 0: # if in the previous hop we did have a non-zero value for the propagation delay, in the current hop we will have at least the same
+              #slope_intercept[ttl+1][1] = slope_intercept[ttl][1]
+              lat = 0
+              #break
+          elif slope_intercept[ttl +1][1] < slope_intercept[ttl][1] and slope_intercept[ttl +1][1] >0: # if the propagation delay decreases at ttl+1 with respect to the value at ttl
               lat = 0
           else:
-              lat = (slope_intercept[ttl +1][1] - slope_intercept[ttl][1])/2
+              lat = (slope_intercept[ttl+1][1] - slope_intercept[ttl][1])/2
 
           bw_lat[ttl+1] = [bw, lat]    
           if options.verbose:
             print " Link " + str(ttl+1) + ": BW [Mb] , LAT[ms]: " + str(bw_lat[ttl +1])
+#4) Detect the access link reported to the revelio client
+    if options.verbose:
+      print "transmission delay, propagation delay: " + str(bw_lat)
 
-#4) Detect the access link and the location of the SK Whitebox
     for ttl in bw_lat:
-      try:
         if ttl > 1 and ttl+1 in bw_lat:
+            # in windows if in TTL = 2 we get 0 and also in TTL=1 -- we cannot run the pathchar detection
+            if bw_lat[ttl][1] == bw_lat[ttl-1][1] and bw_lat[ttl-1][1] == 0:
+              if options.verbose:
+                print "Traceroute probing at TTL = " + str(ttl) + " failed, no reply from hop. Could not run pathchar."
+              access_link =0
+              break
+            # elif bw_lat[ttl-1][1] == 0 and bw_lat[ttl][1] > 0 and bw_lat[ttl-1][0] > 0:
+            #   if options.verbose:
+            #      print "Latency in the previous link is 0 --> changing to 0.1 to let the algoritm run correctly."
+            #   bw_lat[ttl-1][1] = 0.1
+            elif bw_lat[ttl][1] > 0 and bw_lat[ttl-1][1] == 0:
+              if options.verbose:
+                print "Traceroute probing at TTL = " + str(ttl-1) + " failed, no reply from hop. Could not run pathchar."
+              access_link =0
+              break
+            elif bw_lat[ttl][1] == 0 and bw_lat[ttl-1][1] > 0:
+              if options.verbose:
+                print "Traceroute probing at TTL = " + str(ttl) + " failed, no reply from hop. Could not run pathchar."
+              access_link =0
+              break
+
             if options.verbose:
               print "TTL:" + str(ttl) + " for device " + str(uuid)
               print "LATENCY: " + str(bw_lat[ttl][1]) + " previous TTL: " + str(bw_lat[ttl-1][1])
@@ -475,20 +524,13 @@ def run_pathchar(trace_rtt, uuid):
                   print "Access link detected for device " + str(uuid) + ": link " + str(ttl)
                 access_link = ttl
                 break
-
-            #if bw_lat[probe][ttl][1] >= 3* bw_lat[probe][ttl-1][1] and bw_lat[probe][ttl][1] >= bw_lat[probe][ttl+1][1]:
-                #print "Access link detected for probe " + str(probe) + ": link " + str(ttl)
-                #access_link[probe] = ttl
-                #break
         elif ttl+1 not in bw_lat:
-            print "Access link detection: cannot detect"
+            if options.verbose:
+                print "Access link detection: cannot detect"
             access_link = 0
-      except:  
-        if options.verbose:
-          print "Exception. Access link detection: cannot detect"
-        access_link = 0
+    if options.verbose:
+        print "PATHCHAR," + str(uuid) + "," + str(ttl) + "," + str(bw_lat[ttl][1])
     return int(access_link)
-
 # parse the raw Revelio data from a single device (identified by a uuid) to output a Revelio object
 def run_Revelio_characterization(data_uuid, uuid, deployment):
     # the header of the input file: 
@@ -510,7 +552,6 @@ def run_Revelio_characterization(data_uuid, uuid, deployment):
         local_ip = local.split(",")[2].split(":")[1]
     else:
         local_ip = local
-
     upnp_output = data_uuid.IGD.unique()
     upnp = [] # get all the WAN-facing IP addresses of the device connected to Revelio
     for res in upnp_output:
@@ -535,13 +576,17 @@ def run_Revelio_characterization(data_uuid, uuid, deployment):
       print "Traceroute to GRA: "
       print "IPs:" + str(trace_GRA_IP)
       print "RTTs:" + str(trace_GRA_rtt)
-    IPs = []
+    IPs = [0,]
     if trace_GRA_IP.keys():
-      ttl_gra = len(trace_GRA_IP.keys()) # this is the total number of different TTLs we used to run traceroute
-                                           # it is like the timeout_to_MA from the previous version
+      ttl_gra = len(trace_GRA_IP.keys()) # this is the total number of different TTLs we used to run traceroute, regardless receiveing the reply from the hop (i.e., it can be 16 for max. number imposed)
+      # get the hop number of the hop that was the last one to reply to the traceroute probes                                    
       for x in trace_GRA_IP.keys():
-        IPs = IPs + list(trace_GRA_IP[x][100])
-      trace_gra = len(set(IPs)) # this should be 0 is the traceroute doesn't run 
+        if not trace_GRA_IP[x][100].intersection([None]):
+          IPs.append(x)
+          if options.verbose:
+            print "Location of the hops replying to traceroute: " + str(IPs)
+        #IPs = IPs + list(trace_GRA_IP[x][100])
+      trace_gra = max(IPs) #get the max value of the hop_number where the hop replied to the traceroute probe
     else:
       ttl_gra = 0 # traceroute to GRA did not run at all 
       trace_gra = 0
@@ -589,7 +634,7 @@ def run_Revelio_characterization(data_uuid, uuid, deployment):
         shared_ip = private_ip = 0 # we don't find anyhting
     # build the Revelio state -- and pass it when building the device
     # TODO: add the ttl_gra to the state here
-    revelio_state =  Revelio(local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip)
+    revelio_state =  Revelio(local_ip, gra, upnp, pathchar, trace_gra, ttl_gra, shared_ip, private_ip, nr_runs)
     return revelio_state
 
 # this is the function that checks the results of the Revelio Discovery tests, compares them and gives the result
@@ -657,12 +702,15 @@ data = pd.read_csv(input_data, sep = ";") # we read the data from a CSV file
                                # boxid,revelio_type,timestamp,local_IP,IGD,STUN_mapped,trace_packetSize,traceroute_result
                                # this comes from the database schema we defined to store the results of the Revelio client
 # for each boxid in the database, we need to run the same detection
+data = data.convert_objects(convert_numeric=True)
 deployment = data.revelio_type.unique()
+if options.verbose:
+  print "The Revelio raw data came from a deployment on " + str(deployment)
 
 if options.metadata:
-    parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n")
+    parsed.write("boxid,ISP,Technology,Region,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip,nr_runs\n")
 else:
-    parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip\n") #TODO: add orgAS and ISP name here -- use the other script
+    parsed.write("boxid,local_ip,gra,upnp,pathchar,trace_gra,ttl_gra,shared_ip,private_ip,nr_runs\n") #TODO: add orgAS and ISP name here -- use the other script
 
 
 
@@ -678,6 +726,7 @@ for uuid in data.boxid.unique():
     data_uuid = data[data.boxid == uuid]
     
     # parse all the raw Revelio data we collect from the device
+
     revelio_client.revelio = run_Revelio_characterization(data_uuid, uuid, deployment)
     revelio_client.nat444 = run_Revelio_discovery(revelio_client.revelio, uuid)
     if options.verbose:
