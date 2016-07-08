@@ -422,12 +422,18 @@ int main(int argc, char ** argv) {
 	client.sin_addr.s_addr = htonl(INADDR_ANY);
 	//client.sin_port = 0;
 
+
 	if (bind(sock, (struct sockaddr*) &client, sizeof(client)) < 0) {
 		if (debug) {
 			fprintf(stderr, "Error bind to socket for STUN request\n");
 		}
 		close(sock);
 		return -1;
+	}
+
+	if (debug) {
+		printf(stderr, "Client IP address is: %s\n", inet_ntoa(client.sin_addr));
+		printf(stderr, "Client port is: %d\n", (int) ntohs(client.sin_port));
 	}
 
 	res = stun_request(sock, &server, &mapped);
@@ -586,8 +592,35 @@ int main(int argc, char ** argv) {
 
 	fflush(stdout);
 
-	// traceroute to fixed address
 
+	// pathchar to GRA
+
+	while (iter < 21) {
+		packet_len = 120 + 64 * iter;
+		iter++;
+		fprintf(stdout, "%s", oldTests);
+		fprintf(stdout, "%d;", packet_len);
+		//4.69.158.197 samknows1.lon1.level3.net
+		sprintf(trace, "traceroute -n -q 1 -m 16 %s %d", inet_ntoa(mapped.sin_addr), packet_len);
+		f = popen(trace, "r");
+		if (f == NULL) {
+			fprintf(stdout, ";\n");
+			fprintf(stderr, "Failed to run traceroute command\n");
+			exit(0);
+		}
+
+		/* Read the output a line at a time - output it. */
+		while (fgets(path, sizeof(path) - 1, f) != NULL) {
+			split = strtok(path, "\n");
+			fprintf(stdout, "%s|", split);
+		}
+		fprintf(stdout, ";\n");
+		fflush(stdout);
+	}
+
+
+	// traceroute to fixed address -- pathchar
+    iter = 0;
 	while (iter < 21) {
 		packet_len = 120 + 64 * iter;
 		iter++;
