@@ -6,7 +6,7 @@
 #define STUN_COUNT 1
 #define TIMEOUT 3
 #define PACKAGE		"REVELIO"
-#define VERSION		"3.2" //added the pathchar to GRA test
+#define VERSION		"4.0" //added the pathchar to GRA test
 #define MAXBUFLEN 62
 #define PACKET_SIZE 1024
 #define NO_ICMP_PACKET_TO_READ 0
@@ -84,4 +84,3 @@ typedef struct{
 } reply_probe;
 
 #endif /* TESTS_H_ */
-
