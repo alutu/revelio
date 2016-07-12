@@ -561,14 +561,17 @@ int main(int argc, char ** argv) {
      close(sock_raw);
      */
     strncpy(oldTests, tests, 4096);
+
     //because both arrays were empty initially the line is broken by one of the zeros inserted during initialization.
     
     /*-------------------------------------------------------------------------------------------------------------------------
      * TRACEROUTE
      ------------------------------------------------------------------------------------------------------------------------*/
     // traceroute to mapped address
+    int j=0;
+    for (j = 0; j < 2; j++) {
     int iter = 0;
-    int packet_len = 100;
+    int packet_len = 120;
     char trace[512];
     char path[1035];
     memset(trace, '\0', sizeof(512));
@@ -599,54 +602,56 @@ int main(int argc, char ** argv) {
     
     
     // pathchar to GRA
-    
-    while (iter < 21) {
-        packet_len = 120 + 64 * iter;
-        iter++;
-        fprintf(stdout, "%s", oldTests);
-        fprintf(stdout, "%d;", packet_len);
-        //4.69.158.197 samknows1.lon1.level3.net
-        sprintf(trace, "traceroute -n -q 1 -m 16 %s %d", inet_ntoa(mapped.sin_addr), packet_len);
-        f = popen(trace, "r");
-        if (f == NULL) {
-            fprintf(stdout, ";\n");
-            fprintf(stderr, "Failed to run traceroute command\n");
-            exit(0);
-        }
+
+	iter = 1;
+    	while (iter < 11) {
+        	packet_len = 120 + 128 * iter;
+        	iter++;
+        	fprintf(stdout, "%s", oldTests);
+        	fprintf(stdout, "%d;", packet_len);
+        	//4.69.158.197 samknows1.lon1.level3.net
+        	sprintf(trace, "traceroute -n -q 1 -m 16 %s %d", inet_ntoa(mapped.sin_addr), packet_len);
+        	f = popen(trace, "r");
+        	if (f == NULL) {
+            		fprintf(stdout, ";\n");
+            		fprintf(stderr, "Failed to run traceroute command\n");
+            		exit(0);
+        		}
         
-        /* Read the output a line at a time - output it. */
-        while (fgets(path, sizeof(path) - 1, f) != NULL) {
-            split = strtok(path, "\n");
-            fprintf(stdout, "%s|", split);
-        }
-        fprintf(stdout, ";\n");
-        fflush(stdout);
-    }
-    
-    
+        	/* Read the output a line at a time - output it. */
+        	while (fgets(path, sizeof(path) - 1, f) != NULL) {
+            		split = strtok(path, "\n");
+            		fprintf(stdout, "%s|", split);
+        		}
+        	fprintf(stdout, ";\n");
+        	fflush(stdout);
+    		}
+
     // traceroute to fixed address -- pathchar
-    iter = 0;
-    while (iter < 21) {
-        packet_len = 120 + 64 * iter;
-        iter++;
-        fprintf(stdout, "%s", oldTests);
-        fprintf(stdout, "%d;", packet_len);
-        //4.69.158.197 samknows1.lon1.level3.net
-        sprintf(trace, "traceroute -n -q 1 -m 16 4.69.202.89 %d", packet_len);
-        f = popen(trace, "r");
-        if (f == NULL) {
-            fprintf(stdout, ";\n");
-            fprintf(stderr, "Failed to run traceroute command\n");
-            exit(0);
-        }
+    	iter = 0;
+    	while (iter < 11) {
+        	packet_len = 120 + 128 * iter;
+        	iter++;
+        	fprintf(stdout, "%s", oldTests);
+        	fprintf(stdout, "%d;", packet_len);
+        	//4.69.158.197 samknows1.lon1.level3.net
+        	sprintf(trace, "traceroute -n -q 1 -m 16 4.69.202.89 %d", packet_len);
+        	f = popen(trace, "r");
+        	if (f == NULL) {
+            		fprintf(stdout, ";\n");
+            		fprintf(stderr, "Failed to run traceroute command\n");
+            		exit(0);
+        	}
         
-        /* Read the output a line at a time - output it. */
-        while (fgets(path, sizeof(path) - 1, f) != NULL) {
-            split = strtok(path, "\n");
-            fprintf(stdout, "%s|", split);
-        }
-        fprintf(stdout, ";\n");
-        fflush(stdout);
-    }
+        	/* Read the output a line at a time - output it. */
+        	while (fgets(path, sizeof(path) - 1, f) != NULL) {
+            		split = strtok(path, "\n");
+           		fprintf(stdout, "%s|", split);
+        	}
+        	fprintf(stdout, ";\n");
+        	fflush(stdout);
+    		}
+    fprintf(stdout, "%s", oldTests);
+		}
     return 1;
 }
